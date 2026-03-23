@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>IoT IDS — Deep Learning Dashboard</title>
+<meta name="description" content="Real-time Deep Learning Intrusion Detection System for IoT Devices. Monitors network traffic and detects DDoS, Port Scan, and Brute Force attacks instantly." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body class="dark" id="body">
+
+<!-- ═══════════════════ TOP NAV ═══════════════════ -->
+<nav class="topbar">
+  <div class="topbar-left">
+    <div class="shield-icon">🛡️</div>
+    <div>
+      <div class="brand-title">DeepIDS</div>
+      <div class="brand-sub">IoT Intrusion Detection System</div>
+    </div>
+  </div>
+  <div class="topbar-center">
+    <div class="status-pill" id="status-pill">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">CONNECTING…</span>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="time-display" id="clock">--:--:--</div>
+    <div class="iot-badge">
+      <span>🎯 IoT:</span>
+      <span class="mono">{{ iot_ip }}</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════ ATTACK OVERLAY ═══════════════════ -->
+<div class="attack-overlay" id="attack-overlay">
+  <div class="attack-banner">
+    <span class="attack-icon">🚨</span>
+    <span id="overlay-text">ATTACK DETECTED</span>
+    <span class="attack-icon">🚨</span>
+  </div>
+</div>
+
+<!-- ═══════════════════ MAIN GRID ═══════════════════ -->
+<main class="grid">
+
+  <!-- ── COLUMN 1: Metrics + Chart ── -->
+  <section class="column-left">
+
+    <!-- KPI Cards -->
+    <div class="kpi-row">
+      <div class="kpi-card" id="kpi-pps">
+        <div class="kpi-label">Packets / Second</div>
+        <div class="kpi-value" id="pps-val">0</div>
+        <div class="kpi-bar"><div class="kpi-bar-fill" id="pps-bar"></div></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Total Packets</div>
+        <div class="kpi-value" id="total-val">0</div>
+        <div class="kpi-sub">since session start</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Alerts Raised</div>
+        <div class="kpi-value danger" id="alert-count-val">0</div>
+        <div class="kpi-sub">this session</div>
+      </div>
+    </div>
+
+    <!-- Live Traffic Chart -->
+    <div class="card chart-card">
+      <div class="card-header">
+        <span class="card-title">📈 Live Network Traffic</span>
+        <span class="chart-legend"><span class="dot-green"></span>Packets/sec</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="trafficChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Connected IoT Devices -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📡 Active Network Devices</span>
+        <span class="device-count" id="device-count">0 devices</span>
+      </div>
+      <div class="device-list" id="device-list">
+        <div class="device-row placeholder">Waiting for traffic…</div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── COLUMN 2: Alerts ── -->
+  <section class="column-right">
+
+    <div class="card alerts-card">
+      <div class="card-header">
+        <span class="card-title">🚨 Live Alert Feed</span>
+        <button class="clear-btn" onclick="clearAlerts()">Clear</button>
+      </div>
+      <div class="alert-feed" id="alert-feed">
+        <div class="empty-state">
+          <div class="empty-icon">✅</div>
+          <div>No threats detected</div>
+          <div class="empty-sub">System is monitoring…</div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+</main>
+
+<!-- ═══════════════════ ALERT HISTORY TABLE ═══════════════════ -->
+<section class="history-section">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">📋 Attack History Log</span>
+      <span class="history-count" id="history-count">0 events</span>
+    </div>
+    <div class="table-wrap">
+      <table class="history-table" id="history-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Time</th>
+            <th>Attack Type</th>
+            <th>Source IP</th>
+            <th>Target</th>
+            <th>Port</th>
+            <th>Protocol</th>
+            <th>Packets</th>
+            <th>Confidence</th>
+            <th>Severity</th>
+          </tr>
+        </thead>
+        <tbody id="history-body">
+          <tr><td colspan="10" class="empty-row">No attacks logged yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ SCRIPTS ═══════════════════ -->
+<script>
+/* ────── Chart Setup ────── */
+const ctx = document.getElementById('trafficChart').getContext('2d');
+
+const trafficChart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      label: 'Packets/sec',
+      data: [],
+      borderColor: '#00e5ff',
+      backgroundColor: 'rgba(0,229,255,0.08)',
+      borderWidth: 2,
+      fill: true,
+      tension: 0.4,
+      pointRadius: 2,
+      pointBackgroundColor: '#00e5ff',
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 400 },
+    scales: {
+      x: {
+        ticks: { color: '#8892a4', maxTicksLimit: 8, font: { size: 11 } },
+        grid:  { color: 'rgba(255,255,255,0.04)' }
+      },
+      y: {
+        ticks: { color: '#8892a4', font: { size: 11 } },
+        grid:  { color: 'rgba(255,255,255,0.06)' },
+        beginAtZero: true,
+      }
+    },
+    plugins: { legend: { display: false } }
+  }
+});
+
+/* ────── State ────── */
+let alertCount   = 0;
+let historyCount = 0;
+let historyRows  = [];
+
+/* ────── Clock ────── */
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('en-GB');
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+/* ────── Status pill helper ────── */
+function setStatus(state) {
+  const pill = document.getElementById('status-pill');
+  const dot  = document.getElementById('status-dot');
+  const txt  = document.getElementById('status-text');
+  const body = document.getElementById('body');
+  const overlay = document.getElementById('attack-overlay');
+
+  pill.className = 'status-pill ' + state.toLowerCase();
+  dot.className  = 'status-dot '  + state.toLowerCase();
+
+  if (state === 'ATTACK') {
+    txt.textContent = '🚨 ATTACK DETECTED';
+    body.classList.add('attack-mode');
+    overlay.classList.add('show');
+    setTimeout(() => overlay.classList.remove('show'), 4000);
+  } else if (state === 'NORMAL') {
+    txt.textContent = '✅ SYSTEM NORMAL';
+    body.classList.remove('attack-mode');
+  } else {
+    txt.textContent = 'CONNECTING…';
+  }
+}
+
+/* ────── Update traffic stats ────── */
+function updateStats(data) {
+  document.getElementById('pps-val').textContent   = data.pps.toLocaleString();
+  document.getElementById('total-val').textContent = data.total_packets.toLocaleString();
+
+  // PPS bar (cap at 5000 for visual)
+  const pct = Math.min((data.pps / 5000) * 100, 100);
+  document.getElementById('pps-bar').style.width = pct + '%';
+
+  // Status
+  setStatus(data.status || 'NORMAL');
+
+  // Graph
+  if (data.graph_data && data.graph_data.length) {
+    const labels = data.graph_data.map(d => d.time);
+    const values = data.graph_data.map(d => d.pps);
+    trafficChart.data.labels   = labels;
+    trafficChart.data.datasets[0].data = values;
+
+    // Colour the line red during attack
+    const col = data.status === 'ATTACK' ? '#ff1744' : '#00e5ff';
+    trafficChart.data.datasets[0].borderColor     = col;
+    trafficChart.data.datasets[0].backgroundColor = col.replace(')', ',0.08)').replace('rgb', 'rgba');
+    trafficChart.update('none');
+  }
+
+  // Devices
+  const devList = document.getElementById('device-list');
+  const devices = data.active_devices || [];
+  document.getElementById('device-count').textContent = devices.length + ' device(s)';
+  if (devices.length) {
+    devList.innerHTML = devices.map(ip => `
+      <div class="device-row ${ip === '{{ iot_ip }}' ? 'iot-device' : ''}">
+        <span class="dev-icon">${ip === '{{ iot_ip }}' ? '📱' : '💻'}</span>
+        <span class="dev-ip mono">${ip}</span>
+        <span class="dev-label">${ip === '{{ iot_ip }}' ? 'IoT Device (Target)' : 'Network Host'}</span>
+        <span class="dev-dot active"></span>
+      </div>`).join('');
+  }
+}
+
+/* ────── Render a new alert card ────── */
+function renderAlert(alert) {
+  alertCount++;
+  document.getElementById('alert-count-val').textContent = alertCount;
+
+  const feed = document.getElementById('alert-feed');
+  // Remove empty state
+  const empty = feed.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  const sev    = alert.severity.toUpperCase();
+  const sevCls = sev === 'HIGH' ? 'high' : sev === 'MEDIUM' ? 'medium' : 'low';
+
+  const card = document.createElement('div');
+  card.className = `alert-card sev-${sevCls} animate-in`;
+  card.innerHTML = `
+    <div class="alert-top">
+      <span class="alert-type">🚨 ${alert.attack_type}</span>
+      <span class="sev-badge ${sevCls}">${sev}</span>
+    </div>
+    <div class="alert-details">
+      <div><span class="lbl">From:</span> <span class="mono">${alert.src_ip}</span></div>
+      <div><span class="lbl">Target:</span> <span class="mono">${alert.target_ip}</span></div>
+      <div><span class="lbl">Port:</span> <span class="mono">${alert.dst_port || '–'}</span></div>
+      <div><span class="lbl">Confidence:</span> <span class="mono">${alert.confidence}%</span></div>
+    </div>
+    <div class="alert-meta">
+      <span>${alert.time}</span>
+      <span>${alert.packet_count} pkts</span>
+    </div>`;
+  feed.prepend(card);
+
+  // Keep max 30 alert cards
+  const cards = feed.querySelectorAll('.alert-card');
+  if (cards.length > 30) cards[cards.length - 1].remove();
+
+  // Add to history table
+  addHistoryRow(alert);
+}
+
+/* ────── History table row ────── */
+function addHistoryRow(alert) {
+  historyCount++;
+  document.getElementById('history-count').textContent = historyCount + ' event(s)';
+
+  const tbody = document.getElementById('history-body');
+  const empty = tbody.querySelector('.empty-row');
+  if (empty) empty.parentElement.remove();
+
+  const sev    = alert.severity.toUpperCase();
+  const sevCls = sev === 'HIGH' ? 'high' : sev === 'MEDIUM' ? 'medium' : 'low';
+
+  const tr = document.createElement('tr');
+  tr.className = 'history-row new-row';
+  tr.innerHTML = `
+    <td>${historyCount}</td>
+    <td class="mono">${alert.time}</td>
+    <td><strong>${alert.attack_type}</strong></td>
+    <td class="mono danger">${alert.src_ip}</td>
+    <td class="mono">${alert.target_ip}</td>
+    <td class="mono">${alert.dst_port || '–'}</td>
+    <td>${alert.protocol || '–'}</td>
+    <td>${alert.packet_count.toLocaleString()}</td>
+    <td>${alert.confidence}%</td>
+    <td><span class="sev-badge ${sevCls}">${sev}</span></td>`;
+  tbody.prepend(tr);
+  setTimeout(() => tr.classList.remove('new-row'), 800);
+}
+
+/* ────── Clear alerts ────── */
+function clearAlerts() {
+  document.getElementById('alert-feed').innerHTML = `
+    <div class="empty-state">
+      <div class="empty-icon">✅</div>
+      <div>No threats detected</div>
+      <div class="empty-sub">System is monitoring…</div>
+    </div>`;
+  alertCount = 0;
+  document.getElementById('alert-count-val').textContent = '0';
+}
+
+/* ────── SocketIO connection ────── */
+const socket = io();
+
+socket.on('connect', () => {
+  console.log('✅ SocketIO connected');
+  setStatus('NORMAL');
+});
+
+socket.on('disconnect', () => {
+  setStatus('CONNECTING');
+});
+
+socket.on('traffic_update', (data) => {
+  updateStats(data);
+});
+
+socket.on('new_alert', (alert) => {
+  renderAlert(alert);
+});
+</script>
+</body>
+</html>

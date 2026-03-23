@@ -1,0 +1,11 @@
+torch
+torchvision
+torchaudio
+scapy
+flask
+flask-socketio
+scikit-learn
+pandas
+numpy
+imbalanced-learn
+joblib
